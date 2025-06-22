@@ -159,6 +159,7 @@ function App() {
           onStopRecording={handleStopRecording}
           formatDuration={formatDuration}
         />
+
       </main>
 
       <WebcamConfirmModal
