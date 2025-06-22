@@ -32,7 +32,6 @@ export const useScreenCapture = () => {
       setError(null);
       setSelectedSource(source);
       
-      // Get screen stream using Electron's desktopCapturer
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {

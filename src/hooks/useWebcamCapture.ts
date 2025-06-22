@@ -22,11 +22,11 @@ export const useWebcamCapture = () => {
 
       setWebcamStream(stream);
       setIsWebcamEnabled(true);
-      return stream; // Return the stream for immediate use
+      return stream; 
     } catch (err) {
       setError('Failed to access webcam. Please check permissions.');
       console.error('Error accessing webcam:', err);
-      throw err; // Re-throw to handle in calling code
+      throw err; 
     } finally {
       setLoading(false);
     }

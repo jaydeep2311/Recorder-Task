@@ -17,61 +17,76 @@ export const useRecording = () => {
   const contextRef = useRef<CanvasRenderingContext2D | null>(null);
   const animationRef = useRef<number | null>(null);
 
-  // Function to create combined stream with webcam in bottom-left corner
   const createCombinedStream = useCallback((screenStream: MediaStream, webcamStream: MediaStream): MediaStream => {
-    // Create canvas for combining streams
     const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d')!;
+    const context = canvas.getContext('2d', {
+      alpha: false,
+      desynchronized: true,
+      powerPreference: 'high-performance'
+    }) as CanvasRenderingContext2D;
 
-    // Set fixed canvas size for better performance and seekability
-    canvas.width = 1920;
-    canvas.height = 1080;
+    const screenTrack = screenStream.getVideoTracks()[0];
+    const settings = screenTrack.getSettings();
 
-    // Create video elements
+    canvas.width = settings.width || 1920;
+    canvas.height = settings.height || 1080;
+
     const screenVideo = document.createElement('video');
     const webcamVideo = document.createElement('video');
 
-    // Configure video elements for better performance
     screenVideo.srcObject = screenStream;
     screenVideo.muted = true;
     screenVideo.playsInline = true;
     screenVideo.autoplay = true;
+    screenVideo.setAttribute('playsinline', 'true');
 
     webcamVideo.srcObject = webcamStream;
     webcamVideo.muted = true;
     webcamVideo.playsInline = true;
     webcamVideo.autoplay = true;
+    webcamVideo.setAttribute('playsinline', 'true');
 
-    // Store references
     canvasRef.current = canvas;
     contextRef.current = context;
 
-    // Improved drawing loop with better performance
-    const draw = () => {
+    let lastFrameTime = 0;
+    const targetFPS = 30;
+    const frameInterval = 1000 / targetFPS;
+
+    const draw = (currentTime: number) => {
       if (!context || !canvas) return;
 
+      if (currentTime - lastFrameTime < frameInterval) {
+        animationRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastFrameTime = currentTime;
+
       try {
-        // Clear canvas with black background
         context.fillStyle = '#000000';
         context.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Draw screen video (full size) if ready
-        if (screenVideo.readyState >= 2 && screenVideo.videoWidth > 0) {
+        if (screenVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+            screenVideo.videoWidth > 0 && screenVideo.videoHeight > 0) {
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = 'high';
           context.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
         }
 
-        // Draw webcam video (bottom-left corner, 1/4 size) if ready
-        if (webcamVideo.readyState >= 2 && webcamVideo.videoWidth > 0) {
-          const webcamWidth = canvas.width / 4;
-          const webcamHeight = canvas.height / 4;
+        if (webcamVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+            webcamVideo.videoWidth > 0 && webcamVideo.videoHeight > 0) {
+
+          const webcamSize = Math.min(canvas.width / 4, canvas.height / 4);
+          const webcamWidth = webcamSize;
+          const webcamHeight = webcamSize * (webcamVideo.videoHeight / webcamVideo.videoWidth);
           const webcamX = 20;
           const webcamY = canvas.height - webcamHeight - 20;
 
-          // Draw white border for webcam
           context.fillStyle = '#ffffff';
-          context.fillRect(webcamX - 3, webcamY - 3, webcamWidth + 6, webcamHeight + 6);
+          context.fillRect(webcamX - 2, webcamY - 2, webcamWidth + 4, webcamHeight + 4);
 
-          // Draw webcam video
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = 'high';
           context.drawImage(webcamVideo, webcamX, webcamY, webcamWidth, webcamHeight);
         }
       } catch (error) {
@@ -81,11 +96,77 @@ export const useRecording = () => {
       animationRef.current = requestAnimationFrame(draw);
     };
 
-    // Start drawing immediately
-    draw();
+    Promise.all([
+      new Promise(resolve => {
+        if (screenVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          resolve(true);
+        } else {
+          screenVideo.addEventListener('loadeddata', () => resolve(true), { once: true });
+        }
+      }),
+      new Promise(resolve => {
+        if (webcamVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+          resolve(true);
+        } else {
+          webcamVideo.addEventListener('loadeddata', () => resolve(true), { once: true });
+        }
+      })
+    ]).then(() => {
+      console.log('Both video streams ready, starting canvas drawing');
+      animationRef.current = requestAnimationFrame(draw);
+    });
 
-    // Create stream from canvas with better settings for seekability
-    const combinedStream = canvas.captureStream(25); // 25 FPS for better performance
+    const combinedStream = canvas.captureStream(30);
+
+    return combinedStream;
+  }, []);
+
+  const createSeekableCombinedStream = useCallback((screenStream: MediaStream, webcamStream: MediaStream): MediaStream => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D;
+
+    canvas.width = 1920;
+    canvas.height = 1080;
+
+    const screenVideo = document.createElement('video');
+    const webcamVideo = document.createElement('video');
+
+    screenVideo.srcObject = screenStream;
+    screenVideo.muted = true;
+    screenVideo.autoplay = true;
+
+    webcamVideo.srcObject = webcamStream;
+    webcamVideo.muted = true;
+    webcamVideo.autoplay = true;
+
+    const drawFrame = () => {
+      if (!context) return;
+
+      context.fillStyle = '#000000';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (screenVideo.readyState >= 2) {
+        context.drawImage(screenVideo, 0, 0, canvas.width, canvas.height);
+      }
+
+      if (webcamVideo.readyState >= 2) {
+        const webcamWidth = 320; // Fixed size for consistency
+        const webcamHeight = 240;
+        const webcamX = 20;
+        const webcamY = canvas.height - webcamHeight - 20;
+
+        context.fillStyle = '#ffffff';
+        context.fillRect(webcamX - 2, webcamY - 2, webcamWidth + 4, webcamHeight + 4);
+
+        context.drawImage(webcamVideo, webcamX, webcamY, webcamWidth, webcamHeight);
+      }
+
+      setTimeout(drawFrame, 33); // ~30 FPS
+    };
+
+    setTimeout(drawFrame, 100);
+
+    const combinedStream = canvas.captureStream(30);
 
     return combinedStream;
   }, []);
@@ -119,12 +200,10 @@ export const useRecording = () => {
       
       setCurrentSession(session);
 
-      // Reset chunk arrays
       screenChunksRef.current = [];
       webcamChunksRef.current = [];
       combinedChunksRef.current = [];
 
-      // Get microphone stream for all recordings (completely muted for live playback)
       let microphoneStream: MediaStream | null = null;
       try {
         microphoneStream = await navigator.mediaDevices.getUserMedia({
@@ -138,16 +217,14 @@ export const useRecording = () => {
           video: false
         });
 
-        // Create a muted audio context to prevent any live audio playback
         const audioContext = new AudioContext();
         const source = audioContext.createMediaStreamSource(microphoneStream);
         const gainNode = audioContext.createGain();
-        gainNode.gain.value = 0; // Completely mute live audio
+        gainNode.gain.value = 0; 
         source.connect(gainNode);
 
-        // Ensure no audio plays through speakers
         microphoneStream.getAudioTracks().forEach(track => {
-          track.enabled = true; // Keep enabled for recording but mute output
+          track.enabled = true; 
         });
 
         console.log('Microphone stream obtained for recording (completely muted for live playback)');
@@ -155,21 +232,17 @@ export const useRecording = () => {
         console.error('Failed to get microphone:', error);
       }
 
-      // Start screen recording with microphone audio
       if (screenStream) {
         let finalScreenStream = screenStream;
 
-        // Add microphone audio to screen stream
         if (microphoneStream) {
           finalScreenStream = new MediaStream();
-          // Add video tracks from screen
           screenStream.getVideoTracks().forEach(track => {
             finalScreenStream.addTrack(track);
           });
-          // Add audio tracks from microphone (enabled for recording only)
           microphoneStream.getAudioTracks().forEach(track => {
             const clonedTrack = track.clone();
-            clonedTrack.enabled = true; // Enable for recording
+            clonedTrack.enabled = true; 
             finalScreenStream.addTrack(clonedTrack);
           });
         }
@@ -187,21 +260,17 @@ export const useRecording = () => {
         console.log('Screen recording started with microphone');
       }
 
-      // Start webcam recording with microphone audio
       if (webcamStream) {
         let finalWebcamStream = webcamStream;
 
-        // Add microphone audio to webcam stream
         if (microphoneStream) {
           finalWebcamStream = new MediaStream();
-          // Add video tracks from webcam
           webcamStream.getVideoTracks().forEach(track => {
             finalWebcamStream.addTrack(track);
           });
-          // Add audio tracks from microphone
           microphoneStream.getAudioTracks().forEach(track => {
             const clonedTrack = track.clone();
-            clonedTrack.enabled = true; // Enable for recording
+            clonedTrack.enabled = true; 
             finalWebcamStream.addTrack(clonedTrack);
           });
         }
@@ -219,32 +288,21 @@ export const useRecording = () => {
         console.log('Webcam recording started with microphone');
       }
 
-      // Start combined recording (screen + webcam in corner) with microphone
       if (screenStream && webcamStream) {
-        const combinedStream = createCombinedStream(screenStream, webcamStream);
+        const combinedStream = createSeekableCombinedStream(screenStream, webcamStream);
 
-        // Add microphone audio to combined stream
         if (microphoneStream) {
           microphoneStream.getAudioTracks().forEach(track => {
             const clonedTrack = track.clone();
-            clonedTrack.enabled = true; // Enable for recording
+            clonedTrack.enabled = true;
             combinedStream.addTrack(clonedTrack);
           });
         }
 
-        // Use better codec settings for seekable video
-        let mimeType = 'video/webm;codecs=vp8,opus';
-        if (!MediaRecorder.isTypeSupported(mimeType)) {
-          mimeType = 'video/webm;codecs=vp8';
-          if (!MediaRecorder.isTypeSupported(mimeType)) {
-            mimeType = 'video/webm';
-          }
-        }
-
         const combinedRecorder = new MediaRecorder(combinedStream, {
-          mimeType,
-          videoBitsPerSecond: 2500000, // 2.5 Mbps for good quality
-          audioBitsPerSecond: 128000   // 128 kbps for audio
+          mimeType: 'video/webm',
+          videoBitsPerSecond: 2000000, 
+          audioBitsPerSecond: 128000
         });
 
         combinedRecorder.ondataavailable = (event) => {
@@ -254,8 +312,8 @@ export const useRecording = () => {
         };
 
         combinedRecorderRef.current = combinedRecorder;
-        combinedRecorder.start(1000); // Generate chunks every second for better seekability
-        console.log('Combined recording started with microphone and better codec');
+        combinedRecorder.start(); 
+        console.log('Combined recording started with seekable approach');
       }
       
       timerRef.current = setInterval(() => {
@@ -270,7 +328,7 @@ export const useRecording = () => {
       setError('Failed to start recording');
       console.error('Error starting recording:', err);
     }
-  }, [createCombinedStream]);
+  }, [createSeekableCombinedStream]);
 
   const stopRecording = useCallback(async () => {
     try {
@@ -278,16 +336,13 @@ export const useRecording = () => {
       
       if (!currentSession) return;
       
-      // Stop timer
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
       
-      // Stop recorders
       const promises: Promise<void>[] = [];
       
-      // Stop screen recorder
       if (screenRecorderRef.current) {
         promises.push(new Promise((resolve) => {
           screenRecorderRef.current!.onstop = async () => {
@@ -309,7 +364,6 @@ export const useRecording = () => {
         }));
       }
 
-      // Stop webcam recorder
       if (webcamRecorderRef.current) {
         promises.push(new Promise((resolve) => {
           webcamRecorderRef.current!.onstop = async () => {
@@ -331,7 +385,6 @@ export const useRecording = () => {
         }));
       }
 
-      // Stop combined recorder
       if (combinedRecorderRef.current) {
         promises.push(new Promise((resolve) => {
           combinedRecorderRef.current!.onstop = async () => {
